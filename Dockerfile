@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM runpod/worker-comfyui:5.7.1-base
+FROM runpod/worker-comfyui:5.8.6-base
 
 # ============================================================
 # insightface 0.7.3 (prebuilt wheel, numpy 1.x) — mirror of worker_swap
