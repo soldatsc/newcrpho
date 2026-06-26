@@ -13,21 +13,16 @@ RUN pip install --no-cache-dir ultralytics segment-anything scikit-image piexif 
 # Custom nodes (only what the Krea workflow needs)
 # ============================================================
 RUN comfy-node-install rgthree-comfy
-RUN comfy-node-install comfyui-reactor
+# ReActor — Boostedforce NSFW fork (filter removed at source, no patch needed)
+RUN git clone --depth 1 https://github.com/Boostedforce/ComfyUI-ReActor-NSFW /comfyui/custom_nodes/ComfyUI-ReActor-NSFW && \
+    pip install --no-cache-dir -r /comfyui/custom_nodes/ComfyUI-ReActor-NSFW/requirements.txt || true
 RUN comfy-node-install comfyui-impact-pack
 RUN comfy-node-install comfyui-impact-subpack
 
 RUN D=$(find /comfyui/custom_nodes -maxdepth 1 -iname "*impact-pack*" -type d|head -1); [ -f "$D/install.py" ] && cd "$D" && python install.py || true
 RUN D=$(find /comfyui/custom_nodes -maxdepth 1 -iname "*impact-subpack*" -type d|head -1); [ -f "$D/install.py" ] && cd "$D" && python install.py || true
 
-# ============================================================
-# Patch ReActor — disable NSFW filter (same patch as worker_swap)
-# ============================================================
-RUN R=$(find /comfyui/custom_nodes -maxdepth 1 -iname "*reactor*" -type d|head -1); F="$R/scripts/reactor_sfw.py"; \
-    sed -i 's/SCORE = [0-9][0-9.]*/SCORE = 1.1/g' "$F"; \
-    sed -i 's/score > SCORE/score > 999/g' "$F"; \
-    sed -i 's/nsfw_score > /nsfw_score > 999 and nsfw_score > /g' "$F"; \
-    echo "NSFW patch done"
+# (No NSFW patch needed — Boostedforce fork ships with the filter removed.)
 
 # ============================================================
 # Force-reinstall insightface + pin numpy (nodes may overwrite)
@@ -86,5 +81,5 @@ RUN echo "=== custom_nodes ===" && ls /comfyui/custom_nodes/ && \
     test -f /comfyui/models/facerestore_models/GPEN-BFR-512.onnx && echo "GPEN OK" && \
     test -f /comfyui/models/ultralytics/bbox/face_yolov8m.pt && echo "YOLO OK" && \
     ls /comfyui/models/insightface/models/buffalo_l/*.onnx > /dev/null && echo "buffalo_l OK" && \
-    R=$(find /comfyui/custom_nodes -maxdepth 1 -iname '*reactor*' -type d|head -1) && grep -rq "SCORE = 1.1" "$R" && echo "NSFW patch OK" && \
+    test -d "$(find /comfyui/custom_nodes -maxdepth 1 -iname '*reactor*' -type d|head -1)" && echo "ReActor dir OK" && \
     echo "=== ALL OK ==="
