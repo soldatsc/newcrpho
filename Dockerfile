@@ -10,6 +10,27 @@ RUN pip install --no-cache-dir "numpy==1.26.4" onnxruntime \
 RUN pip install --no-cache-dir ultralytics segment-anything scikit-image piexif accelerate "transformers>=4.47" sentencepiece einops timm
 
 # ============================================================
+# LoRAs from Civitai (token via BuildKit secret). Placed EARLY so a bad/empty
+# token fails the build in seconds instead of after the ~18GB model download.
+# wget -q keeps the token out of logs; on failure we dump the error body
+# (never the token) so the cause (Unauthorized / Not Found / ...) is visible.
+# ============================================================
+RUN --mount=type=secret,id=civitai bash -c 'set -e; \
+  T=$(tr -d "\n\r \t" < /run/secrets/civitai); \
+  if [ -z "$T" ]; then echo "ERR: CIVITAI_TOKEN secret is EMPTY (set it in GitHub Secrets)"; exit 1; fi; \
+  echo "civitai token length: ${#T} chars"; \
+  mkdir -p /comfyui/models/loras; \
+  dl(){ \
+    wget -q -O "/comfyui/models/loras/$1" "https://civitai.com/api/download/models/$2?token=$T" || true; \
+    sz=$(wc -c < "/comfyui/models/loras/$1" 2>/dev/null || echo 0); \
+    echo "[$1] version=$2 size=${sz}B"; \
+    if [ "$sz" -lt 1000000 ]; then echo "  FAILED - response head (no token):"; head -c 400 "/comfyui/models/loras/$1" 2>/dev/null; echo; exit 1; fi; \
+  }; \
+  dl realism_engine_krea2_v2.safetensors 3070702; \
+  dl MysticXXX_KREA2_v1.safetensors 3067313; \
+  ls -la /comfyui/models/loras/'
+
+# ============================================================
 # Custom nodes (only what the Krea workflow needs)
 # ============================================================
 RUN comfy-node-install rgthree-comfy
@@ -59,16 +80,6 @@ RUN mkdir -p /comfyui/models/insightface/models/buffalo_l && cd /tmp && \
     python3 -c "import zipfile; z=zipfile.ZipFile('buffalo_l.zip'); z.extractall('b'); z.close()" && \
     find b -name "*.onnx" -exec cp {} /comfyui/models/insightface/models/buffalo_l/ \; && \
     rm -rf buffalo_l.zip b
-
-# ============================================================
-# LoRAs from Civitai (token via BuildKit secret — NOT baked into a layer)
-# ============================================================
-RUN --mount=type=secret,id=civitai mkdir -p /comfyui/models/loras && T=$(cat /run/secrets/civitai) && \
-    wget -q -O /comfyui/models/loras/realism_engine_krea2_v2.safetensors "https://civitai.com/api/download/models/3070702?token=$T" && \
-    wget -q -O /comfyui/models/loras/MysticXXX_KREA2_v1.safetensors "https://civitai.com/api/download/models/3067313?token=$T" && \
-    ls -la /comfyui/models/loras/ && \
-    [ $(wc -c < /comfyui/models/loras/realism_engine_krea2_v2.safetensors) -gt 1000000 ] || (echo "ERR: realism lora download failed (check CIVITAI_TOKEN)" && exit 1) && \
-    [ $(wc -c < /comfyui/models/loras/MysticXXX_KREA2_v1.safetensors) -gt 1000000 ] || (echo "ERR: mystic lora download failed" && exit 1)
 
 # ============================================================
 # Verification (fail build loud if anything missing)
