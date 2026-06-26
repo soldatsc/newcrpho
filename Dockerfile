@@ -16,7 +16,6 @@ RUN comfy-node-install rgthree-comfy
 RUN comfy-node-install comfyui-reactor
 RUN comfy-node-install comfyui-impact-pack
 RUN comfy-node-install comfyui-impact-subpack
-RUN comfy-node-install comfyui-tooling-nodes
 
 RUN D=$(find /comfyui/custom_nodes -maxdepth 1 -iname "*impact-pack*" -type d|head -1); [ -f "$D/install.py" ] && cd "$D" && python install.py || true
 RUN D=$(find /comfyui/custom_nodes -maxdepth 1 -iname "*impact-subpack*" -type d|head -1); [ -f "$D/install.py" ] && cd "$D" && python install.py || true
@@ -36,6 +35,16 @@ RUN R=$(find /comfyui/custom_nodes -maxdepth 1 -iname "*reactor*" -type d|head -
 RUN pip install --no-cache-dir --no-deps --force-reinstall \
     https://huggingface.co/AlienMachineAI/insightface-0.7.3-cp312-cp312-linux_x86_64.whl/resolve/main/insightface-0.7.3-cp312-cp312-linux_x86_64.whl
 RUN pip install --no-cache-dir "numpy==1.26.4"
+
+# ============================================================
+# Force CPU onnxruntime. A node's requirements pulled onnxruntime-gpu built
+# for CUDA 13, but this image is CUDA 12.6 -> "libcudart.so.13: cannot open
+# shared object file" -> ReActor's `import onnxruntime` dies -> node never
+# registers ("ReActorFaceSwap does not exist"). CPU build = no CUDA dep.
+# ============================================================
+RUN pip uninstall -y onnxruntime onnxruntime-gpu || true && pip install --no-cache-dir onnxruntime
+RUN python3 -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__, 'import OK')"
+RUN python3 -c "import insightface; print('insightface', insightface.__version__, 'import OK')"
 
 # ============================================================
 # Models — KREA 2
