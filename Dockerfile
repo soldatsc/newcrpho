@@ -7,7 +7,7 @@ FROM runpod/worker-comfyui:5.8.6-base
 RUN pip install --no-cache-dir "numpy==1.26.4" onnxruntime \
     https://huggingface.co/AlienMachineAI/insightface-0.7.3-cp312-cp312-linux_x86_64.whl/resolve/main/insightface-0.7.3-cp312-cp312-linux_x86_64.whl
 
-RUN pip install --no-cache-dir ultralytics segment-anything scikit-image piexif accelerate "transformers>=4.47" sentencepiece einops timm
+RUN pip install --no-cache-dir ultralytics segment-anything scikit-image piexif numba dill blend-modes accelerate "transformers>=4.47" sentencepiece einops timm
 
 # ============================================================
 # LoRAs from Civitai (token via BuildKit secret). Placed EARLY so a bad/empty
@@ -80,6 +80,31 @@ RUN mkdir -p /comfyui/models/insightface/models/buffalo_l && cd /tmp && \
     python3 -c "import zipfile; z=zipfile.ZipFile('buffalo_l.zip'); z.extractall('b'); z.close()" && \
     find b -name "*.onnx" -exec cp {} /comfyui/models/insightface/models/buffalo_l/ \; && \
     rm -rf buffalo_l.zip b
+
+# ============================================================
+# Boot ComfyUI (CPU) and verify EVERY workflow custom-node registers.
+# Fails the build with the missing list instead of finding it in prod.
+# ============================================================
+RUN <<'EOF'
+set -e
+cd /comfyui
+python main.py --cpu > /tmp/boot.log 2>&1 &
+SRV=$!
+python3 -c '
+import time, urllib.request, json, sys
+o = None
+for _ in range(90):
+    try:
+        o = json.load(urllib.request.urlopen("http://127.0.0.1:8188/object_info", timeout=5)); break
+    except Exception: time.sleep(2)
+if o is None: print("ComfyUI did not start"); sys.exit(1)
+need = ["ReActorFaceSwap", "FaceDetailer", "UltralyticsDetectorProvider", "Power Lora Loader (rgthree)"]
+miss = [n for n in need if n not in o]
+print("NODE CHECK:", "ALL OK" if not miss else "MISSING: " + str(miss))
+sys.exit(1 if miss else 0)
+' || { echo "=== BOOT LOG (tail) ==="; tail -80 /tmp/boot.log; kill $SRV 2>/dev/null || true; exit 1; }
+kill $SRV 2>/dev/null || true
+EOF
 
 # ============================================================
 # Verification (fail build loud if anything missing)
