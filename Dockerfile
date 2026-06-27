@@ -2,6 +2,16 @@
 FROM runpod/worker-comfyui:5.8.6-base
 
 # ============================================================
+# Update ComfyUI (comfyanonymous) to master for the krea2 CLIP type.
+# The 5.8.6 base ships ComfyUI ~0.25.0 (17 Jun) which predates Krea 2 support
+# -> CLIPLoader rejects type 'krea2'. master has CLIPType.KREA2.
+# comfy-kitchen / comfy-aimdo are separate pip packages (loaded as backends),
+# not source patches, so a clean checkout of master leaves them intact.
+# ============================================================
+RUN cd /comfyui && git fetch --depth 1 origin master && git reset --hard FETCH_HEAD && \
+    pip install --no-cache-dir -r requirements.txt && echo "ComfyUI -> $(git rev-parse --short HEAD)"
+
+# ============================================================
 # insightface 0.7.3 (prebuilt wheel, numpy 1.x) — mirror of worker_swap
 # ============================================================
 RUN pip install --no-cache-dir "numpy==1.26.4" onnxruntime \
@@ -100,6 +110,9 @@ for _ in range(90):
 if o is None: print("ComfyUI did not start"); sys.exit(1)
 need = ["ReActorFaceSwap", "FaceDetailer", "UltralyticsDetectorProvider", "Power Lora Loader (rgthree)"]
 miss = [n for n in need if n not in o]
+try: ct = o["CLIPLoader"]["input"]["required"]["type"][0]
+except Exception: ct = []
+if "krea2" not in ct: miss.append("CLIPLoader.krea2 (only %d types)" % len(ct))
 print("NODE CHECK:", "ALL OK" if not miss else "MISSING: " + str(miss))
 sys.exit(1 if miss else 0)
 ' || { echo "=== BOOT LOG (tail) ==="; tail -80 /tmp/boot.log; kill $SRV 2>/dev/null || true; exit 1; }
