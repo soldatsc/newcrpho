@@ -8,7 +8,12 @@ FROM runpod/worker-comfyui:5.8.6-base
 # comfy-kitchen / comfy-aimdo are separate pip packages (loaded as backends),
 # not source patches, so a clean checkout of master leaves them intact.
 # ============================================================
-RUN cd /comfyui && git fetch --depth 1 origin master && git reset --hard FETCH_HEAD && \
+# PINNED to the exact master commit the 2026-06-27 build shipped (last commit
+# before that build). Floating master was a drift source: every rebuild silently
+# changed ComfyUI under BOTH consumers of this image (krea worker + prompt-lab).
+# Bump deliberately by editing this sha.
+ARG COMFYUI_COMMIT=603d891eaf045d726d9c23276b4428daf2977624
+RUN cd /comfyui && git fetch --depth 1 origin ${COMFYUI_COMMIT} && git reset --hard ${COMFYUI_COMMIT} && \
     pip install --no-cache-dir -r requirements.txt && echo "ComfyUI -> $(git rev-parse --short HEAD)"
 
 # ============================================================
@@ -17,7 +22,10 @@ RUN cd /comfyui && git fetch --depth 1 origin master && git reset --hard FETCH_H
 RUN pip install --no-cache-dir "numpy==1.26.4" onnxruntime \
     https://huggingface.co/AlienMachineAI/insightface-0.7.3-cp312-cp312-linux_x86_64.whl/resolve/main/insightface-0.7.3-cp312-cp312-linux_x86_64.whl
 
-RUN pip install --no-cache-dir ultralytics segment-anything scikit-image piexif numba dill blend-modes accelerate "transformers>=4.47" sentencepiece einops timm
+# ultralytics pinned to the version current at the 2026-06-27 build (>=8.3
+# needed for YOLO11 NSFW detector below); floating pip here = same drift class
+# as floating ComfyUI master.
+RUN pip install --no-cache-dir "ultralytics==8.4.65" segment-anything scikit-image piexif numba dill blend-modes accelerate "transformers>=4.47" sentencepiece einops timm
 
 # ============================================================
 # LoRAs from Civitai (token via BuildKit secret). Placed EARLY so a bad/empty
@@ -84,6 +92,54 @@ RUN comfy model download --url https://huggingface.co/datasets/Gourieff/ReActor/
 RUN comfy model download --url https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/GPEN-BFR-512.onnx --relative-path models/facerestore_models --filename GPEN-BFR-512.onnx
 RUN comfy model download --url https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/detection/bbox/face_yolov8m.pt --relative-path models/ultralytics/bbox --filename face_yolov8m.pt
 
+# ============================================================
+# ADDITIVE v2 (2026-07-15): occlusion-aware faceswap toolkit.
+# Nothing above is removed/replaced — the second consumer of this image
+# (txt2img prompt-lab endpoint) keeps working byte-identically.
+# ============================================================
+# NSFW body-part detectors for occluder subtraction (bbox -> SAM -> subtract
+# from the face mask so the swap never repaints genitals/objects at the face).
+# PRIMARY: EraX-NSFW-V1.0 (Apache-2.0, YOLO11m). Classes:
+#   anus, make_love, nipple, penis, vagina  ("make_love" = the act zone —
+#   covers blowjob-at-face even with no hands in frame).
+# BACKUP: NudeNet 640m (AGPL-3.0, YOLOv8m, 18 classes incl.
+#   MALE_GENITALIA_EXPOSED / FEMALE_GENITALIA_EXPOSED / ANUS_EXPOSED).
+RUN comfy model download --url https://huggingface.co/erax-ai/EraX-NSFW-V1.0/resolve/main/erax_nsfw_yolo11m.pt --relative-path models/ultralytics/bbox --filename erax_nsfw_yolo11m.pt
+RUN mkdir -p /comfyui/models/ultralytics/bbox && \
+    wget -q -O /comfyui/models/ultralytics/bbox/nudenet_640m.pt \
+      https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.pt
+
+# CodeFormer restore — was NEVER baked; ReActor used to runtime-download it on
+# warm workers, so fresh cold-started workers lost it (the 2026-07-13 "Krea
+# перестала работать" incident: validation rejects 'codeformer-v0.1.0.pth').
+RUN comfy model download --url https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/codeformer-v0.1.0.pth --relative-path models/facerestore_models --filename codeformer-v0.1.0.pth
+
+# SAM vit_l — finer segmentation near faces (vit_b stays; opt-in by name in
+# the workflow's SAMLoader).
+RUN mkdir -p /comfyui/models/sams && \
+    wget -q -O /comfyui/models/sams/sam_vit_l_0b3195.pth \
+      https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth
+
+# 256px swap models — the ReActor NSFW fork selects the swapper by filename
+# substring (inswapper/reswapper/hyperswap) and looks in these exact dirs.
+# Baked = available; production graphs keep sending inswapper_128.onnx until
+# switched explicitly, so nothing changes until we A/B.
+RUN mkdir -p /comfyui/models/hyperswap /comfyui/models/reswapper && \
+    wget -q -O /comfyui/models/hyperswap/hyperswap_1a_256.onnx \
+      https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/hyperswap_1a_256.onnx && \
+    wget -q -O /comfyui/models/reswapper/reswapper_256.onnx \
+      https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/reswapper_256.onnx
+
+# Impact Subpack whitelist for the new .pt detectors (torch weights_only guard).
+RUN mkdir -p /comfyui/user/default/ComfyUI-Impact-Subpack && \
+    printf 'erax_nsfw_yolo11m.pt\nnudenet_640m.pt\n' >> /comfyui/user/default/ComfyUI-Impact-Subpack/model-whitelist.txt
+
+# Smoke-load both detectors at build time (catches weights_only/pickle issues)
+# and print the exact class-label strings for the BboxDetectorSEGS `labels` filter.
+RUN python3 -c "from ultralytics import YOLO; \
+print('EraX:', YOLO('/comfyui/models/ultralytics/bbox/erax_nsfw_yolo11m.pt').names); \
+print('NudeNet:', YOLO('/comfyui/models/ultralytics/bbox/nudenet_640m.pt').names)"
+
 # buffalo_l face analysis models
 RUN mkdir -p /comfyui/models/insightface/models/buffalo_l && cd /tmp && \
     wget -q https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip && \
@@ -131,4 +187,12 @@ RUN echo "=== custom_nodes ===" && ls /comfyui/custom_nodes/ && \
     test -f /comfyui/models/ultralytics/bbox/face_yolov8m.pt && echo "YOLO OK" && \
     ls /comfyui/models/insightface/models/buffalo_l/*.onnx > /dev/null && echo "buffalo_l OK" && \
     test -d "$(find /comfyui/custom_nodes -maxdepth 1 -iname '*reactor*' -type d|head -1)" && echo "ReActor dir OK" && \
+    test -s /comfyui/models/ultralytics/bbox/erax_nsfw_yolo11m.pt && echo "EraX NSFW OK" && \
+    test -s /comfyui/models/ultralytics/bbox/nudenet_640m.pt && echo "NudeNet OK" && \
+    test -s /comfyui/models/facerestore_models/codeformer-v0.1.0.pth && echo "CodeFormer OK" && \
+    test -s /comfyui/models/sams/sam_vit_l_0b3195.pth && echo "SAM vit_l OK" && \
+    test -s /comfyui/models/hyperswap/hyperswap_1a_256.onnx && echo "HyperSwap OK" && \
+    test -s /comfyui/models/reswapper/reswapper_256.onnx && echo "ReSwapper OK" && \
+    test -s /comfyui/models/ultralytics/bbox/hand_yolov8s.pt && echo "hand YOLO OK (implicit via Subpack)" && \
+    test -s /comfyui/models/sams/sam_vit_b_01ec64.pth && echo "SAM vit_b OK (implicit via Impact)" && \
     echo "=== ALL OK ==="
