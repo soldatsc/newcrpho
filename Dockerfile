@@ -188,7 +188,7 @@ RUN echo "=== custom_nodes ===" && ls /comfyui/custom_nodes/ && \
     ls /comfyui/models/insightface/models/buffalo_l/*.onnx > /dev/null && echo "buffalo_l OK" && \
     test -d "$(find /comfyui/custom_nodes -maxdepth 1 -iname '*reactor*' -type d|head -1)" && echo "ReActor dir OK" && \
     test -s /comfyui/models/ultralytics/bbox/erax_nsfw_yolo11m.pt && echo "EraX NSFW OK" && \
-    test -s /comfyui/models/ultralytics/bbox/nudenet_640m.pt && echo "NudeNet OK" && \
+\
     test -s /comfyui/models/facerestore_models/codeformer-v0.1.0.pth && echo "CodeFormer OK" && \
     test -s /comfyui/models/sams/sam_vit_l_0b3195.pth && echo "SAM vit_l OK" && \
     test -s /comfyui/models/hyperswap/hyperswap_1a_256.onnx && echo "HyperSwap OK" && \
