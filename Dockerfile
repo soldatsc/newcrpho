@@ -102,12 +102,9 @@ RUN comfy model download --url https://huggingface.co/datasets/Gourieff/ReActor/
 # PRIMARY: EraX-NSFW-V1.0 (Apache-2.0, YOLO11m). Classes:
 #   anus, make_love, nipple, penis, vagina  ("make_love" = the act zone —
 #   covers blowjob-at-face even with no hands in frame).
-# BACKUP: NudeNet 640m (AGPL-3.0, YOLOv8m, 18 classes incl.
-#   MALE_GENITALIA_EXPOSED / FEMALE_GENITALIA_EXPOSED / ANUS_EXPOSED).
+# (NudeNet backup was dropped: its GitHub release .pt arrives corrupted —
+#  CI smoke-load caught an UnpicklingError; EraX alone covers the need.)
 RUN comfy model download --url https://huggingface.co/erax-ai/EraX-NSFW-V1.0/resolve/main/erax_nsfw_yolo11m.pt --relative-path models/ultralytics/bbox --filename erax_nsfw_yolo11m.pt
-RUN mkdir -p /comfyui/models/ultralytics/bbox && \
-    wget -q -O /comfyui/models/ultralytics/bbox/nudenet_640m.pt \
-      https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.pt
 
 # CodeFormer restore — was NEVER baked; ReActor used to runtime-download it on
 # warm workers, so fresh cold-started workers lost it (the 2026-07-13 "Krea
@@ -130,15 +127,14 @@ RUN mkdir -p /comfyui/models/hyperswap /comfyui/models/reswapper && \
     wget -q -O /comfyui/models/reswapper/reswapper_256.onnx \
       https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/reswapper_256.onnx
 
-# Impact Subpack whitelist for the new .pt detectors (torch weights_only guard).
+# Impact Subpack whitelist for the new .pt detector (torch weights_only guard).
 RUN mkdir -p /comfyui/user/default/ComfyUI-Impact-Subpack && \
-    printf 'erax_nsfw_yolo11m.pt\nnudenet_640m.pt\n' >> /comfyui/user/default/ComfyUI-Impact-Subpack/model-whitelist.txt
+    printf 'erax_nsfw_yolo11m.pt\n' >> /comfyui/user/default/ComfyUI-Impact-Subpack/model-whitelist.txt
 
-# Smoke-load both detectors at build time (catches weights_only/pickle issues)
+# Smoke-load the detector at build time (catches weights_only/pickle issues)
 # and print the exact class-label strings for the BboxDetectorSEGS `labels` filter.
 RUN python3 -c "from ultralytics import YOLO; \
-print('EraX:', YOLO('/comfyui/models/ultralytics/bbox/erax_nsfw_yolo11m.pt').names); \
-print('NudeNet:', YOLO('/comfyui/models/ultralytics/bbox/nudenet_640m.pt').names)"
+print('EraX:', YOLO('/comfyui/models/ultralytics/bbox/erax_nsfw_yolo11m.pt').names)"
 
 # buffalo_l face analysis models
 RUN mkdir -p /comfyui/models/insightface/models/buffalo_l && cd /tmp && \
